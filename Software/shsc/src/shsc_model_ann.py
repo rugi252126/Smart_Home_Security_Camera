@@ -21,7 +21,7 @@ INPUT_SHAPE = IMAGE_WIDTH * IMAGE_HEIGHT * IMAGE_DEPTH
 NUM_OF_CLASSES = 3
 ROI_PAD_SIZE = 30
 BATCH_SIZE = 32
-CAMERA_SOURCE_INDEX = 0
+CAMERA_SOURCE_INDEX = 1
 
 
 class SmartHomeSecurityCameraModel:
@@ -67,7 +67,7 @@ class SmartHomeSecurityCameraModel:
 
             # detect faces in the input frame
             rects = self.detector.detectMultiScale(gray, scaleFactor=1.05, 
-                minNeighbors=5, minSize=(30, 30),
+                minNeighbors=5, minSize=(34, 34),
                 flags=cv2.CASCADE_SCALE_IMAGE)
 
             # loop over the face bounding boxes
@@ -125,8 +125,8 @@ class SmartHomeSecurityCameraModel:
                 cv2.rectangle(frameClone, (fX, fY), (fX + fW, fY + fH),
                     (255, 0, 0), 2)
 
-            # show our detected faces along with smiling/not smiling labels
-            cv2.imshow("Face", frameClone)
+            # show our detected faces along with sthe predicted labels
+            cv2.imshow("Logitech", frameClone)
 
             # if the 'q' key is pressed, stop the loop
             if cv2.waitKey(1) & 0xFF == ord("q"):
