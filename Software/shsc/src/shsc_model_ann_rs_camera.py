@@ -24,6 +24,7 @@ ROI_PAD_SIZE = 30
 BATCH_SIZE = 32
 CAMERA_SOURCE_INDEX = 0
 MIN_VALID_DISTANCE_IN_CM = 30
+NUM_OF_UNKNOWN_PREDICTION = 5
 
 
 class SmartHomeSecurityCameraModel:
@@ -33,6 +34,11 @@ class SmartHomeSecurityCameraModel:
         self.detector = cv2.CascadeClassifier(cascade)
         self.model = load_model(model)
 
+        self.invalid_dist_status_b = False
+        self.unknown_preds_status_b = False
+        self.unknown_preds_ctr = 0
+        self.dist_to_center = 0
+
         self.assign_class_label()
 
     def assign_class_label(self):
@@ -40,7 +46,7 @@ class SmartHomeSecurityCameraModel:
         self.class_label = ["Edgi", "Rudy", "Unknown"]
 
     def check_input_source(self):
-        if args.get("image", False):
+        if self.video_paths is not None: #args.get("video", False):
             # grab the reference to video
             self.camera = cv2.VideoCapture(self.video_paths)
         else:
@@ -55,33 +61,41 @@ class SmartHomeSecurityCameraModel:
             #self.profile = self.pipeline.start(config)
             self.pipeline.start(config)
 
-
             # Skip 5 first frames to give the Auto-Exposure time to adjust
             for x in range(5):
                 self.pipeline.wait_for_frames()
         
+    def evaluate_prediction(self, dist_meter, preds, snapshot):
+        if self.dist_to_center < MIN_VALID_DISTANCE_IN_CM:
+            self.invalid_dist_status_b = True
+        else:
+            # further evaluation will only be done if the detected person is 
+            # within valid range
+            self.invalid_dist_status_b = False
 
-    def process_distance(self, dist_meter):
-        # Intel RealSense camera the distance is in meter form
-        # convert the distance to centimeter and then to integer type
-        self.dist_to_center = int(dist_meter * 100)
-
+            if preds == "Unknown":
+                if self.unknown_preds_ctr < NUM_OF_UNKNOWN_PREDICTION:
+                    self.unknown_preds_ctr +=1
+                else:
+                    self.unknown_preds_status_b = True
+                    print("[INFO] Detected unknown person")
+                    # TODO: save the snapshot
+                    #path = "../snapshot/unidentified_person.jpg"
+            else:
+                self.unknown_preds_ctr = 0
 
     def start(self):
-        self.check_input_source()
-
         try:
-            while True:
+            # Wait for a coherent pair of frames: depth and color
+            frameset = self.pipeline.wait_for_frames()
+            depth_frame = frameset.get_depth_frame()
+            color_frame = frameset.get_color_frame()
 
-                # Wait for a coherent pair of frames: depth and color
-                frameset = self.pipeline.wait_for_frames()
-                depth_frame = frameset.get_depth_frame()
-                color_frame = frameset.get_color_frame()
-
-
-                if not depth_frame or not color_frame:
-                    continue
-
+            # check if depth and color frames are available
+            if not depth_frame or not color_frame:
+                pass
+            else:
+            #if depth_frame and color_frame:
                 # RGB Data
                 # start with accessing the color componnent of the frameset
                 color = np.asanyarray(color_frame.get_data())
@@ -126,8 +140,14 @@ class SmartHomeSecurityCameraModel:
                     minNeighbors=5, minSize=(34, 34),
                     flags=cv2.CASCADE_SCALE_IMAGE)
 
+                # init ROI status
+                valid_roi_b = False
+
                 # loop over the face bounding boxes
                 for (fX, fY, fW, fH) in rects:
+                    # ROI is extracted successfully
+                    valid_roi_b = True
+
                     # extract the ROI of the face from the original image
                     roi = frame[fY:fY + fH , fX:fX + fW]
 
@@ -144,8 +164,9 @@ class SmartHomeSecurityCameraModel:
                     center_y = fY + (fH // 2)
                     # Once center coordinate is located, get the distance using depth image
                     dist_meter = aligned_depth_frame.get_distance(center_x, center_y)
-                    self.process_distance(dist_meter)
-
+                    # Intel RealSense camera the distance is in meter form
+                    # convert the distance to centimeter and then to integer type
+                    self.dist_to_center = int(dist_meter * 100)
 
                     # resize it to a fixed pixels, and then prepare the
                     # ROI for classification via the ANN
@@ -193,7 +214,7 @@ class SmartHomeSecurityCameraModel:
                     (255, 0, 0), 2)
 
                     # add distance information
-                    if self.dist_to_center < MIN_VALID_DISTANCE_IN_CM:
+                    if self.invalid_dist_status_b:
                         dist_txt = "Invalid distance"
                     else:
                         dist_txt = "Distance: {}".format(self.dist_to_center) + "cm"
@@ -204,26 +225,33 @@ class SmartHomeSecurityCameraModel:
                     cv2.rectangle(colorized_depth, (fX, fY), (fX + fW, fY + fH),
                     (255, 0, 0), 2)
 
-                
-                # Stack both images together horizontally
-                images = np.hstack((frameClone, colorized_depth))
+                    # evaluate further the predicted data
+                    self.evaluate_prediction(self.dist_to_center, self.class_label[idx], frameClone)
 
-                # show our detected faces along with predicted labels
-                cv2.namedWindow("Intel RealSense", cv2.WINDOW_AUTOSIZE)
-                cv2.imshow("Intel RealSense", images)
-                #cv2.waitKey(1)
-                # if the 'q' key is pressed, stop the loop
-                if cv2.waitKey(1) & 0xFF == ord("q"):
-                    break
+                if valid_roi_b:
+                    # Stack both images together horizontally
+                    images = np.hstack((frameClone, colorized_depth))
 
-            # cleanup the camera and close any open windows
-            cv2.destroyAllWindows()
+                    # show our detected faces along with predicted labels
+                    cv2.namedWindow("Intel RealSense", cv2.WINDOW_AUTOSIZE)
+                    cv2.imshow("Intel RealSense", images)
 
         finally:
+            pass
+            
 
-            # Stop streaming
-            self.pipeline.stop()
+    def get_prediction_status(self):
+        return self.unknown_preds_status_b
 
+    # once snapshot has been sent, clear the flag
+    def clear_prediction_status(self):
+        self.unknown_preds_status_b = False  
+
+    def exit(self):  
+        # Stop streaming
+        self.pipeline.stop()
+        # cleanup the camera and close any open windows
+        cv2.destroyAllWindows()
 
 
 # entry point if executed from file level
@@ -240,4 +268,13 @@ if __name__ == '__main__':
 
     # create an instance of class SmartHomeSecurityCameraModel
     shscm = SmartHomeSecurityCameraModel(args["cascade"], args["model"], args["video"])
-    shscm.start()
+    shscm.check_input_source()
+
+    while True:
+        shscm.start()
+
+        # if the 'q' key is pressed, stop the loop
+        if cv2.waitKey(1) & 0xFF == ord("q"):
+            break      
+    
+    shscm.exit()
